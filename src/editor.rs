@@ -7,21 +7,19 @@ use termion::raw::{IntoRawMode, RawTerminal};
 
 enum Mode {
     Command,
-}
-
-enum Action {
-    None,
-    Exit,
+    Switch,
 }
 
 pub struct Editor {
     mode: Mode,
+    exit: bool,
 }
 
 impl Editor {
     pub fn create() -> Editor {
         Editor {
             mode: Mode::Command,
+            exit: false,
         }
     }
 
@@ -33,11 +31,10 @@ impl Editor {
             let key = res?;
             self.render(&mut stdout)?;
             stdout.flush()?;
-            let action = self.handle(key)?;
-            match action {
-                Action::Exit => break,
-                Action::None => {}
-            }
+            self.handle(key)?;
+            if self.exit {
+                break;
+            };
         }
         Ok(())
     }
@@ -48,20 +45,43 @@ impl Editor {
     }
 
     fn render(&self, term: &mut RawTerminal<Stdout>) -> Result<(), Box<dyn Error>> {
-        write!(term, "render\r\n")?;
+        match self.mode {
+            Mode::Command => self.render_command(term),
+            Mode::Switch => self.render_switch(term),
+        }
+    }
+
+    fn render_command(&self, term: &mut RawTerminal<Stdout>) -> Result<(), Box<dyn Error>> {
+        write!(term, "{}command", clear::All)?;
         Ok(())
     }
 
-    fn handle(&self, key: Key) -> Result<Action, Box<dyn Error>> {
+    fn render_switch(&self, term: &mut RawTerminal<Stdout>) -> Result<(), Box<dyn Error>> {
+        write!(term, "{}switch", clear::All)?;
+        Ok(())
+    }
+
+    fn handle(&mut self, key: Key) -> Result<(), Box<dyn Error>> {
         match self.mode {
-            Mode::Command => self.command(key),
+            Mode::Command => self.handle_command(key),
+            Mode::Switch => self.handle_switch(key),
         }
     }
 
-    fn command(&self, key: Key) -> Result<Action, Box<dyn Error>> {
+    fn handle_command(&mut self, key: Key) -> Result<(), Box<dyn Error>> {
         match key {
-            Key::Char('B') => Ok(Action::Exit),
-            _ => Ok(Action::None),
+            Key::Char('\t') => self.mode = Mode::Switch,
+            Key::Char('B') => self.exit = true,
+            _ => {}
         }
+        Ok(())
+    }
+
+    fn handle_switch(&mut self, key: Key) -> Result<(), Box<dyn Error>> {
+        match key {
+            Key::Char('\t') => self.mode = Mode::Command,
+            _ => {}
+        }
+        Ok(())
     }
 }
