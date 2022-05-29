@@ -1,9 +1,9 @@
 use std::error::Error;
 use std::io::{stdin, stdout, Stdout, Write};
-use termion::clear;
 use termion::event::Key;
 use termion::input::TermRead;
 use termion::raw::{IntoRawMode, RawTerminal};
+use termion::{clear, cursor, terminal_size};
 
 enum Mode {
     Command,
@@ -12,52 +12,62 @@ enum Mode {
 
 pub struct Editor {
     mode: Mode,
-    exit: bool,
+    run: bool,
 }
 
 impl Editor {
     pub fn create() -> Editor {
         Editor {
             mode: Mode::Command,
-            exit: false,
+            run: true,
         }
     }
 
     pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
-        let stdin = stdin();
-        let mut stdout = stdout().into_raw_mode()?;
-        self.clear(&mut stdout)?;
-        for res in stdin.keys() {
-            let key = res?;
-            self.render(&mut stdout)?;
-            stdout.flush()?;
-            self.handle(key)?;
-            if self.exit {
-                break;
-            };
+        let mut term = stdout().into_raw_mode()?;
+        let mut keys = stdin().keys();
+        while self.run {
+            write!(term, "{}", clear::All)?;
+            let (columns, rows) = terminal_size()?;
+            self.render(&mut term, columns, rows)?;
+            term.flush()?;
+            if let Some(Ok(key)) = keys.next() {
+                self.handle(key)?;
+            }
         }
+        write!(term, "{}{}", clear::All, cursor::Goto(1, 1))?;
         Ok(())
     }
 
-    fn clear(&self, term: &mut RawTerminal<Stdout>) -> Result<(), Box<dyn Error>> {
-        write!(term, "{}", clear::All)?;
-        Ok(())
-    }
-
-    fn render(&self, term: &mut RawTerminal<Stdout>) -> Result<(), Box<dyn Error>> {
+    fn render(
+        &self,
+        term: &mut RawTerminal<Stdout>,
+        columns: u16,
+        rows: u16,
+    ) -> Result<(), Box<dyn Error>> {
         match self.mode {
-            Mode::Command => self.render_command(term),
-            Mode::Switch => self.render_switch(term),
+            Mode::Command => self.render_command(term, columns, rows),
+            Mode::Switch => self.render_switch(term, columns, rows),
         }
     }
 
-    fn render_command(&self, term: &mut RawTerminal<Stdout>) -> Result<(), Box<dyn Error>> {
-        write!(term, "{}command", clear::All)?;
+    fn render_command(
+        &self,
+        term: &mut RawTerminal<Stdout>,
+        _columns: u16,
+        _rows: u16,
+    ) -> Result<(), Box<dyn Error>> {
+        write!(term, "{}command", cursor::Goto(1, 1))?;
         Ok(())
     }
 
-    fn render_switch(&self, term: &mut RawTerminal<Stdout>) -> Result<(), Box<dyn Error>> {
-        write!(term, "{}switch", clear::All)?;
+    fn render_switch(
+        &self,
+        term: &mut RawTerminal<Stdout>,
+        _columns: u16,
+        _rows: u16,
+    ) -> Result<(), Box<dyn Error>> {
+        write!(term, "{}switch", cursor::Goto(1, 1))?;
         Ok(())
     }
 
@@ -67,11 +77,10 @@ impl Editor {
             Mode::Switch => self.handle_switch(key),
         }
     }
-
     fn handle_command(&mut self, key: Key) -> Result<(), Box<dyn Error>> {
         match key {
             Key::Char('\t') => self.mode = Mode::Switch,
-            Key::Char('B') => self.exit = true,
+            Key::Char('B') => self.run = false,
             _ => {}
         }
         Ok(())
