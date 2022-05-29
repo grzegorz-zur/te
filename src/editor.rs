@@ -3,6 +3,7 @@ use std::io::{stdin, stdout, Stdout, Write};
 use termion::event::Key;
 use termion::input::TermRead;
 use termion::raw::{IntoRawMode, RawTerminal};
+use termion::screen::AlternateScreen;
 use termion::{clear, cursor, terminal_size};
 
 enum Mode {
@@ -24,7 +25,7 @@ impl Editor {
     }
 
     pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
-        let mut term = stdout().into_raw_mode()?;
+        let mut term = AlternateScreen::from(stdout().into_raw_mode()?);
         let mut keys = stdin().keys();
         while self.run {
             write!(term, "{}", clear::All)?;
@@ -35,7 +36,6 @@ impl Editor {
                 self.handle(key)?;
             }
         }
-        write!(term, "{}{}", clear::All, cursor::Goto(1, 1))?;
         Ok(())
     }
 
