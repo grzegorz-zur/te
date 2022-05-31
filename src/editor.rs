@@ -1,7 +1,6 @@
 use std::env::current_dir;
 use std::error::Error;
 use std::io::{stdin, stdout, Stdout, Write};
-use std::path::PathBuf;
 use termion::event::Key;
 use termion::input::TermRead;
 use termion::raw::{IntoRawMode, RawTerminal};
@@ -21,16 +20,20 @@ pub struct Editor {
 }
 
 struct Files {
-    path: PathBuf,
-    list: Vec<PathBuf>,
+    path: String,
+    query: String,
+    list: Vec<String>,
+    filter: Vec<String>,
 }
 
 impl Editor {
     pub fn create() -> Editor {
         Editor {
             files: Files {
-                path: PathBuf::new(),
+                path: String::new(),
+                query: String::new(),
                 list: vec![],
+                filter: vec![],
             },
             mode: Mode::Command,
             run: true,
@@ -65,8 +68,8 @@ impl Editor {
     fn render_switch(&self, term: &mut RawTerminal<Stdout>) -> Result<(), Box<dyn Error>> {
         let (_columns, rows) = terminal_size()?;
         let mut row = 1;
-        for file in &self.files.list {
-            write!(term, "{}{}", cursor::Goto(1, row), file.display())?;
+        for file in &self.files.filter {
+            write!(term, "{}{}", cursor::Goto(1, row), file)?;
             row += 1;
             if row == rows {
                 break;
@@ -74,10 +77,11 @@ impl Editor {
         }
         write!(
             term,
-            "{}{}{}{}",
+            "{}{}{} {}{}",
             cursor::Goto(1, rows),
             color::Bg(color::Blue),
-            self.files.path.display(),
+            self.files.path,
+            self.files.query,
             clear::AfterCursor
         )?;
         Ok(())
@@ -105,7 +109,7 @@ impl Editor {
         match key {
             Key::Char('\t') => {
                 self.mode = Mode::Switch;
-                self.list_files()?;
+                self.files_list()?;
             }
             Key::Char('B') => self.run = false,
             _ => {}
@@ -116,25 +120,50 @@ impl Editor {
     fn handle_switch(&mut self, key: Key) -> Result<(), Box<dyn Error>> {
         match key {
             Key::Char('\t') => self.mode = Mode::Command,
+            Key::Backspace => {
+                self.files.query.pop();
+                self.files_filter()?;
+            }
+            Key::Char(c) => {
+                self.files.query += &c.to_string();
+                self.files_filter()?;
+            }
             _ => {}
         }
         Ok(())
     }
 
-    fn list_files(&mut self) -> Result<(), Box<dyn Error>> {
-        self.files.path = current_dir()?;
+    fn files_list(&mut self) -> Result<(), Box<dyn Error>> {
+        self.files.path = current_dir()?.to_string_lossy().to_string();
+        self.files.query = String::new();
         self.files.list.clear();
-        for file in WalkDir::new(self.files.path.as_path())
+        for file in WalkDir::new(&self.files.path)
             .follow_links(true)
             .sort_by_file_name()
             .into_iter()
             .filter_map(|file| file.ok())
         {
             if file.metadata()?.is_file() {
-                let relative = file.path().strip_prefix(self.files.path.as_path())?;
-                self.files.list.push(relative.to_path_buf());
+                let relative = file
+                    .path()
+                    .strip_prefix(&self.files.path)?
+                    .to_string_lossy()
+                    .to_string();
+                self.files.list.push(relative);
             }
         }
+        self.files.filter = self.files.list.clone();
+        Ok(())
+    }
+
+    fn files_filter(&mut self) -> Result<(), Box<dyn Error>> {
+        self.files.filter = self
+            .files
+            .list
+            .iter()
+            .filter(|file| file.contains(&self.files.query))
+            .cloned()
+            .collect();
         Ok(())
     }
 }
