@@ -21,6 +21,7 @@ pub struct Editor {
 
 struct Files {
     path: String,
+    hide: bool,
     query: String,
     list: Vec<String>,
     filter: Vec<String>,
@@ -31,6 +32,7 @@ impl Editor {
         Editor {
             files: Files {
                 path: String::new(),
+                hide: true,
                 query: String::new(),
                 list: vec![],
                 filter: vec![],
@@ -120,6 +122,10 @@ impl Editor {
     fn handle_switch(&mut self, key: Key) -> Result<(), Box<dyn Error>> {
         match key {
             Key::Char('\t') => self.mode = Mode::Command,
+            Key::BackTab => {
+                self.files.hide = !self.files.hide;
+                self.files_list()?
+            }
             Key::Backspace => {
                 self.files.query.pop();
                 self.files_filter()?;
@@ -141,6 +147,13 @@ impl Editor {
             .follow_links(true)
             .sort_by_file_name()
             .into_iter()
+            .filter_entry(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .map(|name| !self.files.hide || !name.starts_with("."))
+                    .unwrap_or(true)
+            })
             .filter_map(|file| file.ok())
         {
             if file.metadata()?.is_file() {
