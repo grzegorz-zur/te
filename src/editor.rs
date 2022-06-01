@@ -12,7 +12,6 @@ enum Mode {
     Command,
     Switch,
 }
-
 pub struct Editor {
     files: Files,
     mode: Mode,
@@ -25,6 +24,7 @@ struct Files {
     query: String,
     list: Vec<String>,
     filter: Vec<String>,
+    select: usize,
 }
 
 impl Editor {
@@ -36,6 +36,7 @@ impl Editor {
                 query: String::new(),
                 list: vec![],
                 filter: vec![],
+                select: 0,
             },
             mode: Mode::Command,
             run: true,
@@ -69,9 +70,21 @@ impl Editor {
 
     fn render_switch(&self, term: &mut RawTerminal<Stdout>) -> Result<(), Box<dyn Error>> {
         let (_columns, rows) = terminal_size()?;
-        let mut row = 1;
+        let mut row: u16 = 1;
         for file in &self.files.filter {
-            write!(term, "{}{}", cursor::Goto(1, row), file)?;
+            if self.files.select + 1 == row.into() {
+                write!(
+                    term,
+                    "{}{}{}{}{}",
+                    cursor::Goto(1, row),
+                    color::Bg(color::LightBlack),
+                    file,
+                    clear::UntilNewline,
+                    color::Bg(color::Reset),
+                )?;
+            } else {
+                write!(term, "{}{}", cursor::Goto(1, row), file)?;
+            }
             row += 1;
             if row == rows {
                 break;
@@ -79,12 +92,13 @@ impl Editor {
         }
         write!(
             term,
-            "{}{}{} {}{}",
+            "{}{}{} {}{}{}",
             cursor::Goto(1, rows),
             color::Bg(color::Blue),
             self.files.path,
             self.files.query,
-            clear::AfterCursor
+            clear::UntilNewline,
+            color::Bg(color::Reset),
         )?;
         Ok(())
     }
@@ -126,10 +140,21 @@ impl Editor {
                 self.files.hide = !self.files.hide;
                 self.files_list()?
             }
+            Key::Down => {
+                if self.files.select + 1 < self.files.filter.len() {
+                    self.files.select += 1;
+                }
+            }
+            Key::Up => {
+                if self.files.select > 0 {
+                    self.files.select -= 1;
+                }
+            }
             Key::Backspace => {
                 self.files.query.pop();
                 self.files_filter()?;
             }
+            Key::Char('\n') => {}
             Key::Char(c) => {
                 self.files.query += &c.to_string();
                 self.files_filter()?;
@@ -166,6 +191,7 @@ impl Editor {
             }
         }
         self.files.filter = self.files.list.clone();
+        self.files.select = 0;
         Ok(())
     }
 
@@ -177,6 +203,7 @@ impl Editor {
             .filter(|file| file.contains(&self.files.query))
             .cloned()
             .collect();
+        self.files.select = 0;
         Ok(())
     }
 }
