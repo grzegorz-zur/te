@@ -1,4 +1,5 @@
 mod editor;
+mod file;
 
 use editor::*;
 use std::error::Error;

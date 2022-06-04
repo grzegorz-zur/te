@@ -8,38 +8,39 @@ use termion::screen::AlternateScreen;
 use termion::{clear, color, cursor, terminal_size};
 use walkdir::WalkDir;
 
+use crate::file::File;
+
 enum Mode {
     Command,
     Switch,
 }
+
 pub struct Editor {
-    files: Files,
     mode: Mode,
     run: bool,
-}
-
-struct Files {
     path: String,
     hide: bool,
-    query: String,
     list: Vec<String>,
+    query: String,
     filter: Vec<String>,
     select: usize,
+    files: Vec<File>,
+    current: usize,
 }
 
 impl Editor {
     pub fn create() -> Editor {
         Editor {
-            files: Files {
-                path: String::new(),
-                hide: true,
-                query: String::new(),
-                list: vec![],
-                filter: vec![],
-                select: 0,
-            },
             mode: Mode::Command,
             run: true,
+            path: String::new(),
+            hide: true,
+            list: vec![],
+            query: String::new(),
+            filter: vec![],
+            select: 0,
+            files: vec![],
+            current: 0,
         }
     }
 
@@ -64,15 +65,27 @@ impl Editor {
         }
     }
 
-    fn render_command(&self, _term: &mut RawTerminal<Stdout>) -> Result<(), Box<dyn Error>> {
+    fn render_command(&self, term: &mut RawTerminal<Stdout>) -> Result<(), Box<dyn Error>> {
+        if let Some(file) = self.files.get(self.current) {
+            file.render(term)?;
+        }
+        let (_columns, rows) = terminal_size()?;
+        write!(
+            term,
+            "{}{}{}{}",
+            cursor::Goto(1, rows),
+            color::Bg(color::Green),
+            clear::UntilNewline,
+            color::Bg(color::Reset),
+        )?;
         Ok(())
     }
 
     fn render_switch(&self, term: &mut RawTerminal<Stdout>) -> Result<(), Box<dyn Error>> {
         let (_columns, rows) = terminal_size()?;
         let mut row: u16 = 1;
-        for file in &self.files.filter {
-            if self.files.select + 1 == row.into() {
+        for file in &self.filter {
+            if self.select + 1 == row.into() {
                 write!(
                     term,
                     "{}{}{}{}{}",
@@ -95,8 +108,8 @@ impl Editor {
             "{}{}{} {}{}{}",
             cursor::Goto(1, rows),
             color::Bg(color::Blue),
-            self.files.path,
-            self.files.query,
+            self.path,
+            self.query,
             clear::UntilNewline,
             color::Bg(color::Reset),
         )?;
@@ -125,7 +138,7 @@ impl Editor {
         match key {
             Key::Char('\t') => {
                 self.mode = Mode::Switch;
-                self.files_list()?;
+                self.list()?;
             }
             Key::Char('B') => self.run = false,
             _ => {}
@@ -137,38 +150,45 @@ impl Editor {
         match key {
             Key::Char('\t') => self.mode = Mode::Command,
             Key::BackTab => {
-                self.files.hide = !self.files.hide;
-                self.files_list()?
+                self.hide = !self.hide;
+                self.list()?
             }
             Key::Down => {
-                if self.files.select + 1 < self.files.filter.len() {
-                    self.files.select += 1;
+                if self.select + 1 < self.filter.len() {
+                    self.select += 1;
                 }
             }
             Key::Up => {
-                if self.files.select > 0 {
-                    self.files.select -= 1;
+                if self.select > 0 {
+                    self.select -= 1;
                 }
             }
             Key::Backspace => {
-                self.files.query.pop();
-                self.files_filter()?;
+                self.query.pop();
+                self.filter();
             }
-            Key::Char('\n') => {}
+            Key::Char('\n') => {
+                if let Some(path) = self.filter.get(self.select) {
+                    let file = File::open(path)?;
+                    self.files.push(file);
+                    self.current = self.files.len() - 1;
+                    self.mode = Mode::Command;
+                }
+            }
             Key::Char(c) => {
-                self.files.query += &c.to_string();
-                self.files_filter()?;
+                self.query += &c.to_string();
+                self.filter();
             }
             _ => {}
         }
         Ok(())
     }
 
-    fn files_list(&mut self) -> Result<(), Box<dyn Error>> {
-        self.files.path = current_dir()?.to_string_lossy().to_string();
-        self.files.query = String::new();
-        self.files.list.clear();
-        for file in WalkDir::new(&self.files.path)
+    fn list(&mut self) -> Result<(), Box<dyn Error>> {
+        self.path = current_dir()?.to_string_lossy().to_string();
+        self.query = String::new();
+        self.list.clear();
+        for file in WalkDir::new(&self.path)
             .follow_links(true)
             .sort_by_file_name()
             .into_iter()
@@ -176,7 +196,7 @@ impl Editor {
                 entry
                     .file_name()
                     .to_str()
-                    .map(|name| !self.files.hide || !name.starts_with("."))
+                    .map(|name| !self.hide || !name.starts_with("."))
                     .unwrap_or(true)
             })
             .filter_map(|file| file.ok())
@@ -184,26 +204,24 @@ impl Editor {
             if file.metadata()?.is_file() {
                 let relative = file
                     .path()
-                    .strip_prefix(&self.files.path)?
+                    .strip_prefix(&self.path)?
                     .to_string_lossy()
                     .to_string();
-                self.files.list.push(relative);
+                self.list.push(relative);
             }
         }
-        self.files.filter = self.files.list.clone();
-        self.files.select = 0;
+        self.filter = self.list.clone();
+        self.select = 0;
         Ok(())
     }
 
-    fn files_filter(&mut self) -> Result<(), Box<dyn Error>> {
-        self.files.filter = self
-            .files
+    fn filter(&mut self) {
+        self.filter = self
             .list
             .iter()
-            .filter(|file| file.contains(&self.files.query))
+            .filter(|file| file.contains(&self.query))
             .cloned()
             .collect();
-        self.files.select = 0;
-        Ok(())
+        self.select = 0;
     }
 }
