@@ -5,9 +5,12 @@ use std::io::Write;
 use termion::raw::RawTerminal;
 use termion::{clear, cursor, terminal_size};
 
+use crate::position::Position;
+
 pub struct File {
     path: String,
     content: String,
+    index: usize,
 }
 
 impl File {
@@ -15,6 +18,7 @@ impl File {
         let mut file = File {
             path: path.to_string(),
             content: String::new(),
+            index: 0,
         };
         file.read()?;
         Ok(file)
@@ -25,7 +29,7 @@ impl File {
         Ok(())
     }
 
-    pub fn render(&self, term: &mut RawTerminal<Stdout>) -> Result<(), Box<dyn Error>> {
+    pub fn render(&self, term: &mut RawTerminal<Stdout>) -> Result<(u16, u16), Box<dyn Error>> {
         let (_columns, rows) = terminal_size()?;
         let mut row: u16 = 1;
         for line in self.content.lines() {
@@ -41,6 +45,28 @@ impl File {
                 break;
             }
         }
-        Ok(())
+        let position = self.position();
+        let column: u16 = position.column.try_into()?;
+        let row: u16 = position.line.try_into()?;
+        Ok((column + 1, row + 1))
+    }
+
+    pub fn position(&self) -> Position {
+        self.content
+            .chars()
+            .take(self.index)
+            .fold(Position::start(), |p, c| p.next(c))
+    }
+
+    pub fn backward(&mut self) {
+        if self.index > 0 {
+            self.index -= 1;
+        }
+    }
+
+    pub fn forward(&mut self) {
+        if self.index + 1 < self.content.len() {
+            self.index += 1;
+        }
     }
 }

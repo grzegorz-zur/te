@@ -66,9 +66,10 @@ impl Editor {
     }
 
     fn render_command(&self, term: &mut RawTerminal<Stdout>) -> Result<(), Box<dyn Error>> {
-        if let Some(file) = self.files.get(self.current) {
-            file.render(term)?;
-        }
+        let position = match self.files.get(self.current) {
+            Some(file) => Some(file.render(term)?),
+            None => None,
+        };
         let (_columns, rows) = terminal_size()?;
         write!(
             term,
@@ -78,6 +79,9 @@ impl Editor {
             clear::UntilNewline,
             color::Bg(color::Reset),
         )?;
+        if let Some((column, row)) = position {
+            write!(term, "{}", cursor::Goto(column, row))?;
+        }
         Ok(())
     }
 
@@ -140,7 +144,11 @@ impl Editor {
                 self.mode = Mode::Switch;
                 self.list()?;
             }
+            Key::Char('d') => self.files[self.current].backward(),
+            Key::Char('f') => self.files[self.current].forward(),
             Key::Char('B') => self.run = false,
+            Key::Right => self.files[self.current].forward(),
+            Key::Left => self.files[self.current].backward(),
             _ => {}
         }
         Ok(())
@@ -196,7 +204,7 @@ impl Editor {
                 entry
                     .file_name()
                     .to_str()
-                    .map(|name| !self.hide || !name.starts_with("."))
+                    .map(|name| !self.hide || !name.starts_with('.'))
                     .unwrap_or(true)
             })
             .filter_map(|file| file.ok())
