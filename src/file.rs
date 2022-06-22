@@ -3,14 +3,17 @@ use std::fs::read_to_string;
 use std::io::Stdout;
 use std::io::Write;
 use termion::raw::RawTerminal;
-use termion::{clear, cursor, terminal_size};
+use termion::{clear, color, cursor};
 
-use crate::position::Position;
+use crate::coords::*;
+use crate::utils::*;
 
 pub struct File {
-    path: String,
-    content: String,
+    pub path: String,
+    pub content: String,
     index: usize,
+    offset: Position,
+    render: bool,
 }
 
 impl File {
@@ -19,6 +22,8 @@ impl File {
             path: path.to_string(),
             content: String::new(),
             index: 0,
+            offset: Position::start(),
+            render: true,
         };
         file.read()?;
         Ok(file)
@@ -29,33 +34,55 @@ impl File {
         Ok(())
     }
 
-    pub fn render(&self, term: &mut RawTerminal<Stdout>) -> Result<(u16, u16), Box<dyn Error>> {
-        let (_columns, rows) = terminal_size()?;
-        let mut row: u16 = 1;
-        for line in self.content.lines() {
+    pub fn render(
+        &mut self,
+        term: &mut RawTerminal<Stdout>,
+        size: Size,
+    ) -> Result<(Position, Position), Box<dyn Error>> {
+        let position = self.position();
+        if position.line < self.offset.line || position.line >= self.offset.line + size.lines {
+            if position.line >= size.lines / 2 {
+                self.offset.line = position.line - size.lines / 2;
+            } else {
+                self.offset.line = 0;
+            };
+            self.render = true;
+        }
+        if position.column < self.offset.column
+            || position.column >= self.offset.column + size.columns
+        {
+            if position.column >= size.columns / 2 {
+                self.offset.column = position.column - size.columns / 2;
+            } else {
+                self.offset.column = 0;
+            };
+            self.render = true;
+        }
+        if self.render {
             write!(
                 term,
                 "{}{}{}",
-                cursor::Goto(1, row),
-                line,
-                clear::UntilNewline,
+                color::Bg(color::Reset),
+                cursor::Goto(1, 1),
+                clear::All
             )?;
-            row += 1;
-            if row == rows {
-                break;
-            }
+            self.content
+                .lines()
+                .skip(self.offset.line)
+                .take(size.lines)
+                .map(|line| sub(line, self.offset.column..self.offset.column + size.columns))
+                .try_for_each(|line| write!(term, "{}\r\n", line))?;
         }
-        let position = self.position();
-        let column: u16 = position.column.try_into()?;
-        let row: u16 = position.line.try_into()?;
-        Ok((column + 1, row + 1))
+        self.render = false;
+        let relative = Position::start() + (position - self.offset);
+        Ok((position, relative))
     }
 
     pub fn position(&self) -> Position {
         self.content
             .chars()
             .take(self.index)
-            .fold(Position::start(), |p, c| p.next(c))
+            .fold(Position::start(), Position::next)
     }
 
     pub fn backward(&mut self) {

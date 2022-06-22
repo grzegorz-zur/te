@@ -1,6 +1,7 @@
+mod coords;
 mod editor;
 mod file;
-mod position;
+mod utils;
 
 use editor::*;
 use std::error::Error;

@@ -1,6 +1,6 @@
 use std::env::current_dir;
 use std::error::Error;
-use std::io::{stdin, stdout, Stdout, Write};
+use std::io::{stderr, stdin, stdout, Stdout, Write};
 use termion::event::Key;
 use termion::input::TermRead;
 use termion::raw::{IntoRawMode, RawTerminal};
@@ -8,7 +8,8 @@ use termion::screen::AlternateScreen;
 use termion::{clear, color, cursor, terminal_size};
 use walkdir::WalkDir;
 
-use crate::file::File;
+use crate::coords::*;
+use crate::file::*;
 
 enum Mode {
     Command,
@@ -45,12 +46,13 @@ impl Editor {
     }
 
     pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
-        let mut term = AlternateScreen::from(stdout().into_raw_mode()?);
+        let term = stdout().into_raw_mode()?;
+        let mut screen = AlternateScreen::from(term);
         let mut keys = stdin().keys();
         while self.run {
-            self.clear(&mut term)?;
-            self.render(&mut term)?;
-            term.flush()?;
+            let size = terminal_size()?.into();
+            self.render(&mut screen, size)?;
+            screen.flush()?;
             if let Some(Ok(key)) = keys.next() {
                 self.handle(key)?;
             }
@@ -58,76 +60,80 @@ impl Editor {
         Ok(())
     }
 
-    fn render(&self, term: &mut RawTerminal<Stdout>) -> Result<(), Box<dyn Error>> {
+    fn render(&mut self, term: &mut RawTerminal<Stdout>, size: Size) -> Result<(), Box<dyn Error>> {
         match self.mode {
-            Mode::Command => self.render_command(term),
-            Mode::Switch => self.render_switch(term),
+            Mode::Command => self.render_command(term, size),
+            Mode::Switch => self.render_switch(term, size),
         }
     }
 
-    fn render_command(&self, term: &mut RawTerminal<Stdout>) -> Result<(), Box<dyn Error>> {
-        let position = match self.files.get(self.current) {
-            Some(file) => Some(file.render(term)?),
-            None => None,
-        };
-        let (_columns, rows) = terminal_size()?;
-        write!(
-            term,
-            "{}{}{}{}",
-            cursor::Goto(1, rows),
-            color::Bg(color::Green),
-            clear::UntilNewline,
-            color::Bg(color::Reset),
-        )?;
-        if let Some((column, row)) = position {
-            write!(term, "{}", cursor::Goto(column, row))?;
-        }
-        Ok(())
-    }
-
-    fn render_switch(&self, term: &mut RawTerminal<Stdout>) -> Result<(), Box<dyn Error>> {
-        let (_columns, rows) = terminal_size()?;
-        let mut row: u16 = 1;
-        for file in &self.filter {
-            if self.select + 1 == row.into() {
+    fn render_command(
+        &mut self,
+        term: &mut RawTerminal<Stdout>,
+        size: Size,
+    ) -> Result<(), Box<dyn Error>> {
+        let (_columns, rows) = size.try_into()?;
+        match self.files.get_mut(self.current) {
+            Some(file) => {
+                let (position, relative) = file.render(
+                    term,
+                    Size {
+                        lines: size.lines - 1,
+                        columns: size.columns,
+                    },
+                )?;
                 write!(
                     term,
-                    "{}{}{}{}{}",
-                    cursor::Goto(1, row),
-                    color::Bg(color::LightBlack),
-                    file,
-                    clear::UntilNewline,
-                    color::Bg(color::Reset),
+                    "{}{}{}{} {}:{}",
+                    cursor::Goto(1, rows),
+                    color::Bg(color::Green),
+                    clear::CurrentLine,
+                    file.path,
+                    position.line,
+                    position.column,
                 )?;
-            } else {
-                write!(term, "{}{}", cursor::Goto(1, row), file)?;
+                if let Ok((column, row)) = relative.try_into() {
+                    write!(term, "{}", cursor::Goto(column, row))?;
+                }
             }
-            row += 1;
-            if row == rows {
-                break;
+            None => {
+                write!(
+                    term,
+                    "{}{}{}",
+                    cursor::Goto(1, rows),
+                    color::Bg(color::Green),
+                    clear::CurrentLine,
+                )?;
             }
         }
-        write!(
-            term,
-            "{}{}{} {}{}{}",
-            cursor::Goto(1, rows),
-            color::Bg(color::Blue),
-            self.path,
-            self.query,
-            clear::UntilNewline,
-            color::Bg(color::Reset),
-        )?;
         Ok(())
     }
 
-    fn clear(&self, term: &mut RawTerminal<Stdout>) -> Result<(), Box<dyn Error>> {
+    fn render_switch(
+        &self,
+        term: &mut RawTerminal<Stdout>,
+        size: Size,
+    ) -> Result<(), Box<dyn Error>> {
+        let (_columns, rows) = size.try_into()?;
         write!(
             term,
-            "{}{}{}{}",
-            color::Fg(color::Reset),
+            "{}{}{}",
             color::Bg(color::Reset),
-            clear::All,
-            cursor::Goto(1, 1)
+            cursor::Goto(1, 1),
+            clear::All
+        )?;
+        self.filter
+            .iter()
+            .take(size.lines - 1)
+            .try_for_each(|file| write!(term, "{}\r\n", file))?;
+        write!(
+            term,
+            "{}{}{}{} {}",
+            cursor::Goto(1, rows),
+            color::Bg(color::Blue),
+            clear::CurrentLine,
+            self.path,
+            self.query,
         )?;
         Ok(())
     }
@@ -138,6 +144,7 @@ impl Editor {
             Mode::Switch => self.handle_switch(key),
         }
     }
+
     fn handle_command(&mut self, key: Key) -> Result<(), Box<dyn Error>> {
         match key {
             Key::Char('\t') => {
@@ -231,5 +238,12 @@ impl Editor {
             .cloned()
             .collect();
         self.select = 0;
+    }
+}
+
+impl Drop for Editor {
+    fn drop(&mut self) {
+        stdout().flush().unwrap();
+        stderr().flush().unwrap();
     }
 }
