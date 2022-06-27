@@ -40,24 +40,7 @@ impl File {
         size: Size,
     ) -> Result<(Position, Position), Box<dyn Error>> {
         let position = self.position();
-        if position.line < self.offset.line || position.line >= self.offset.line + size.lines {
-            if position.line >= size.lines / 2 {
-                self.offset.line = position.line - size.lines / 2;
-            } else {
-                self.offset.line = 0;
-            };
-            self.render = true;
-        }
-        if position.column < self.offset.column
-            || position.column >= self.offset.column + size.columns
-        {
-            if position.column >= size.columns / 2 {
-                self.offset.column = position.column - size.columns / 2;
-            } else {
-                self.offset.column = 0;
-            };
-            self.render = true;
-        }
+        (self.offset, self.render) = self.offset.shift(position, size);
         if self.render {
             write!(
                 term,

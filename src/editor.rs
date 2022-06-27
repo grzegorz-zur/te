@@ -23,8 +23,9 @@ pub struct Editor {
     hide: bool,
     list: Vec<String>,
     query: String,
-    filter: Vec<String>,
-    select: usize,
+    view: Vec<String>,
+    offset: Position,
+    position: Position,
     files: Vec<File>,
     current: usize,
 }
@@ -32,14 +33,15 @@ pub struct Editor {
 impl Editor {
     pub fn create() -> Editor {
         Editor {
-            mode: Mode::Command,
             run: true,
+            mode: Mode::Command,
             path: String::new(),
             hide: true,
             list: vec![],
             query: String::new(),
-            filter: vec![],
-            select: 0,
+            view: vec![],
+            offset: Position::start(),
+            position: Position::start(),
             files: vec![],
             current: 0,
         }
@@ -110,11 +112,17 @@ impl Editor {
     }
 
     fn render_switch(
-        &self,
+        &mut self,
         term: &mut RawTerminal<Stdout>,
         size: Size,
     ) -> Result<(), Box<dyn Error>> {
-        let (_columns, rows) = size.try_into()?;
+        (self.offset, _) = self.offset.shift(
+            self.position,
+            Size {
+                lines: size.lines - 1,
+                columns: size.columns,
+            },
+        );
         write!(
             term,
             "{}{}{}",
@@ -122,14 +130,25 @@ impl Editor {
             cursor::Goto(1, 1),
             clear::All
         )?;
-        self.filter
+        self.view
             .iter()
+            .skip(self.offset.line)
             .take(size.lines - 1)
             .try_for_each(|file| write!(term, "{}\r\n", file))?;
+        if let Some(path) = self.view.get(self.position.line) {
+            write!(
+                term,
+                "{}{}{}{}",
+                cursor::Goto(1, (self.position.line - self.offset.line + 1).try_into()?),
+                color::Bg(color::LightBlack),
+                clear::CurrentLine,
+                path
+            )?;
+        }
         write!(
             term,
             "{}{}{}{} {}",
-            cursor::Goto(1, rows),
+            cursor::Goto(1, size.lines.try_into()?),
             color::Bg(color::Blue),
             clear::CurrentLine,
             self.path,
@@ -169,13 +188,13 @@ impl Editor {
                 self.list()?
             }
             Key::Down => {
-                if self.select + 1 < self.filter.len() {
-                    self.select += 1;
+                if self.position.line + 1 < self.view.len() {
+                    self.position.line += 1;
                 }
             }
             Key::Up => {
-                if self.select > 0 {
-                    self.select -= 1;
+                if self.position.line > 0 {
+                    self.position.line -= 1;
                 }
             }
             Key::Backspace => {
@@ -183,7 +202,7 @@ impl Editor {
                 self.filter();
             }
             Key::Char('\n') => {
-                if let Some(path) = self.filter.get(self.select) {
+                if let Some(path) = self.view.get(self.position.line) {
                     let file = File::open(path)?;
                     self.files.push(file);
                     self.current = self.files.len() - 1;
@@ -225,19 +244,19 @@ impl Editor {
                 self.list.push(relative);
             }
         }
-        self.filter = self.list.clone();
-        self.select = 0;
+        self.view = self.list.clone();
+        self.position = Position::start();
         Ok(())
     }
 
     fn filter(&mut self) {
-        self.filter = self
+        self.view = self
             .list
             .iter()
             .filter(|file| file.contains(&self.query))
             .cloned()
             .collect();
-        self.select = 0;
+        self.position = Position::start();
     }
 }
 

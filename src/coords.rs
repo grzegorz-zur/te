@@ -32,6 +32,25 @@ impl Position {
             },
         }
     }
+
+    pub fn shift(self, position: Position, size: Size) -> (Self, bool) {
+        let mut offset = self;
+        if position.line < self.line || position.line >= self.line + size.lines {
+            if position.line >= size.lines / 2 {
+                offset.line = position.line - size.lines / 2;
+            } else {
+                offset.line = 0;
+            };
+        }
+        if position.column < self.column || position.column >= self.column + size.columns {
+            if position.column >= size.columns / 2 {
+                offset.column = position.column - size.columns / 2;
+            } else {
+                offset.column = 0;
+            };
+        }
+        (offset, offset != self)
+    }
 }
 
 impl From<(u16, u16)> for Position {
