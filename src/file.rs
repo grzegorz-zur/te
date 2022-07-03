@@ -13,7 +13,6 @@ pub struct File {
     pub content: String,
     index: usize,
     offset: Position,
-    render: bool,
 }
 
 impl File {
@@ -23,7 +22,6 @@ impl File {
             content: String::new(),
             index: 0,
             offset: Position::start(),
-            render: true,
         };
         file.read()?;
         Ok(file)
@@ -40,23 +38,20 @@ impl File {
         size: Size,
     ) -> Result<(Position, Position), Box<dyn Error>> {
         let position = self.position();
-        (self.offset, self.render) = self.offset.shift(position, size);
-        if self.render {
-            write!(
-                term,
-                "{}{}{}",
-                color::Bg(color::Reset),
-                cursor::Goto(1, 1),
-                clear::All
-            )?;
-            self.content
-                .lines()
-                .skip(self.offset.line)
-                .take(size.lines)
-                .map(|line| sub(line, self.offset.column..self.offset.column + size.columns))
-                .try_for_each(|line| write!(term, "{}\r\n", line))?;
-        }
-        self.render = false;
+        self.offset = self.offset.shift(position, size);
+        write!(
+            term,
+            "{}{}{}",
+            color::Bg(color::Reset),
+            cursor::Goto(1, 1),
+            clear::All
+        )?;
+        self.content
+            .lines()
+            .skip(self.offset.line)
+            .take(size.lines)
+            .map(|line| sub(line, self.offset.column..self.offset.column + size.columns))
+            .try_for_each(|line| write!(term, "{}\r\n", line))?;
         let relative = Position::start() + (position - self.offset);
         Ok((position, relative))
     }

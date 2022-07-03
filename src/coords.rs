@@ -33,7 +33,7 @@ impl Position {
         }
     }
 
-    pub fn shift(self, position: Position, size: Size) -> (Self, bool) {
+    pub fn shift(self, position: Position, size: Size) -> Self {
         let mut offset = self;
         if position.line < self.line || position.line >= self.line + size.lines {
             if position.line >= size.lines / 2 {
@@ -49,7 +49,7 @@ impl Position {
                 offset.column = 0;
             };
         }
-        (offset, offset != self)
+        offset
     }
 }
 

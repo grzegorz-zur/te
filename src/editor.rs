@@ -116,7 +116,7 @@ impl Editor {
         term: &mut RawTerminal<Stdout>,
         size: Size,
     ) -> Result<(), Box<dyn Error>> {
-        (self.offset, _) = self.offset.shift(
+        self.offset = self.offset.shift(
             self.position,
             Size {
                 lines: size.lines - 1,
@@ -166,10 +166,7 @@ impl Editor {
 
     fn handle_command(&mut self, key: Key) -> Result<(), Box<dyn Error>> {
         match key {
-            Key::Char('\t') => {
-                self.mode = Mode::Switch;
-                self.list()?;
-            }
+            Key::Char('\t') => self.mode_switch()?,
             Key::Char('d') => self.files[self.current].backward(),
             Key::Char('f') => self.files[self.current].forward(),
             Key::Char('B') => self.run = false,
@@ -182,10 +179,10 @@ impl Editor {
 
     fn handle_switch(&mut self, key: Key) -> Result<(), Box<dyn Error>> {
         match key {
-            Key::Char('\t') => self.mode = Mode::Command,
+            Key::Char('\t') => self.mode_command(),
             Key::BackTab => {
                 self.hide = !self.hide;
-                self.list()?
+                self.list()?;
             }
             Key::Down => {
                 if self.position.line + 1 < self.view.len() {
@@ -215,6 +212,16 @@ impl Editor {
             }
             _ => {}
         }
+        Ok(())
+    }
+
+    fn mode_command(&mut self) {
+        self.mode = Mode::Command;
+    }
+
+    fn mode_switch(&mut self) -> Result<(), Box<dyn Error>> {
+        self.mode = Mode::Switch;
+        self.list()?;
         Ok(())
     }
 
