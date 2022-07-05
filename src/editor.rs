@@ -63,6 +63,13 @@ impl Editor {
     }
 
     fn render(&mut self, term: &mut RawTerminal<Stdout>, size: Size) -> Result<(), Box<dyn Error>> {
+        write!(
+            term,
+            "{}{}{}",
+            color::Bg(color::Reset),
+            cursor::Goto(1, 1),
+            clear::All
+        )?;
         match self.mode {
             Mode::Command => self.render_command(term, size),
             Mode::Switch => self.render_switch(term, size),
@@ -123,13 +130,6 @@ impl Editor {
                 columns: size.columns,
             },
         );
-        write!(
-            term,
-            "{}{}{}",
-            color::Bg(color::Reset),
-            cursor::Goto(1, 1),
-            clear::All
-        )?;
         self.view
             .iter()
             .skip(self.offset.line)
@@ -166,20 +166,25 @@ impl Editor {
 
     fn handle_command(&mut self, key: Key) -> Result<(), Box<dyn Error>> {
         match key {
-            Key::Char('\t') => self.mode_switch()?,
-            Key::Char('d') => self.files[self.current].backward(),
-            Key::Char('f') => self.files[self.current].forward(),
-            Key::Char('B') => self.run = false,
-            Key::Right => self.files[self.current].forward(),
-            Key::Left => self.files[self.current].backward(),
+            Key::Char('\t') => self.switch()?,
+            Key::Char('B') => self.exit(),
             _ => {}
+        }
+        if let Some(file) = self.files.get_mut(self.current) {
+            match key {
+                Key::Char('d') => file.backward(),
+                Key::Char('f') => file.forward(),
+                Key::Right => file.forward(),
+                Key::Left => file.backward(),
+                _ => {}
+            }
         }
         Ok(())
     }
 
     fn handle_switch(&mut self, key: Key) -> Result<(), Box<dyn Error>> {
         match key {
-            Key::Char('\t') => self.mode_command(),
+            Key::Char('\t') => self.command(),
             Key::BackTab => {
                 self.hide = !self.hide;
                 self.list()?;
@@ -198,38 +203,43 @@ impl Editor {
                 self.query.pop();
                 self.filter();
             }
-            Key::Char('\n') => {
-                if let Some(path) = self.view.get(self.position.line) {
-                    let file = File::open(path)?;
-                    self.files.push(file);
-                    self.current = self.files.len() - 1;
-                    self.mode = Mode::Command;
-                }
-            }
+            Key::Char('\n') => self.open()?,
             Key::Char(c) => {
-                self.query += &c.to_string();
-                self.filter();
+                self.query.push(c);
+                self.filter()
             }
             _ => {}
         }
         Ok(())
     }
 
-    fn mode_command(&mut self) {
+    fn command(&mut self) {
         self.mode = Mode::Command;
     }
 
-    fn mode_switch(&mut self) -> Result<(), Box<dyn Error>> {
+    fn switch(&mut self) -> Result<(), Box<dyn Error>> {
         self.mode = Mode::Switch;
         self.list()?;
         Ok(())
     }
 
+    fn exit(&mut self) {
+        self.run = false;
+    }
+
+    fn open(&mut self) -> Result<(), Box<dyn Error>> {
+        if let Some(path) = self.view.get(self.position.line) {
+            let file = File::open(path)?;
+            self.files.push(file);
+            self.current = self.files.len() - 1;
+            self.mode = Mode::Command;
+        }
+        Ok(())
+    }
+
     fn list(&mut self) -> Result<(), Box<dyn Error>> {
         self.path = current_dir()?.to_string_lossy().to_string();
-        self.query = String::new();
-        self.list.clear();
-        for file in WalkDir::new(&self.path)
+        self.list = WalkDir::new(&self.path)
             .follow_links(true)
             .sort_by_file_name()
             .into_iter()
@@ -241,16 +251,24 @@ impl Editor {
                     .unwrap_or(true)
             })
             .filter_map(|file| file.ok())
-        {
-            if file.metadata()?.is_file() {
-                let relative = file
-                    .path()
-                    .strip_prefix(&self.path)?
-                    .to_string_lossy()
-                    .to_string();
-                self.list.push(relative);
-            }
-        }
+            .filter_map(|file| {
+                if file.metadata().ok()?.is_file() {
+                    Some(file)
+                } else {
+                    None
+                }
+            })
+            .filter_map(|file| {
+                Some(
+                    file.path()
+                        .strip_prefix(&self.path)
+                        .ok()?
+                        .to_string_lossy()
+                        .to_string(),
+                )
+            })
+            .collect();
+        self.query = String::new();
         self.view = self.list.clone();
         self.position = Position::start();
         Ok(())
