@@ -11,8 +11,8 @@ use crate::utils::*;
 pub struct File {
     pub path: String,
     pub content: String,
-    index: usize,
-    offset: Position,
+    pub position: Position,
+    pub offset: Position,
 }
 
 impl File {
@@ -20,7 +20,7 @@ impl File {
         let mut file = File {
             path: path.to_string(),
             content: String::new(),
-            index: 0,
+            position: Position::start(),
             offset: Position::start(),
         };
         file.read()?;
@@ -37,8 +37,7 @@ impl File {
         term: &mut RawTerminal<Stdout>,
         size: Size,
     ) -> Result<(Position, Position), Box<dyn Error>> {
-        let position = self.position();
-        self.offset = self.offset.shift(position, size);
+        self.offset = self.offset.shift(self.position, size);
         write!(
             term,
             "{}{}{}",
@@ -52,26 +51,20 @@ impl File {
             .take(size.lines)
             .map(|line| sub(line, self.offset.column..self.offset.column + size.columns))
             .try_for_each(|line| write!(term, "{}\r\n", line))?;
-        let relative = Position::start() + (position - self.offset);
-        Ok((position, relative))
+        let relative = Position::start() + (self.position - self.offset);
+        Ok((self.position, relative))
     }
 
-    pub fn position(&self) -> Position {
-        self.content
-            .chars()
-            .take(self.index)
-            .fold(Position::start(), Position::next)
-    }
-
-    pub fn backward(&mut self) {
-        if self.index > 0 {
-            self.index -= 1;
-        }
-    }
-
-    pub fn forward(&mut self) {
-        if self.index + 1 < self.content.len() {
-            self.index += 1;
+    pub fn goto(&mut self, target: Position) {
+        let mut position = Position::start();
+        self.position = position;
+        for character in self.content.chars() {
+            position = position.next(character);
+            if position <= target {
+                self.position = position;
+            } else {
+                break;
+            }
         }
     }
 }

@@ -172,10 +172,18 @@ impl Editor {
         }
         if let Some(file) = self.files.get_mut(self.current) {
             match key {
-                Key::Char('d') => file.backward(),
-                Key::Char('f') => file.forward(),
-                Key::Right => file.forward(),
-                Key::Left => file.backward(),
+                Key::Char('a') => file.goto(file.position.up()),
+                Key::Char('A') => file.goto(Position::start()),
+                Key::Char('s') => file.goto(file.position.down()),
+                Key::Char('S') => file.goto(Position::end()),
+                Key::Char('d') => file.goto(file.position.left()),
+                Key::Char('D') => file.goto(file.position.line_start()),
+                Key::Char('f') => file.goto(file.position.right()),
+                Key::Char('F') => file.goto(file.position.line_end()),
+                Key::Up => file.goto(file.position.up()),
+                Key::Down => file.goto(file.position.down()),
+                Key::Left => file.goto(file.position.left()),
+                Key::Right => file.goto(file.position.right()),
                 _ => {}
             }
         }

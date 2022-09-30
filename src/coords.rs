@@ -20,6 +20,61 @@ impl Position {
         Position { line: 0, column: 0 }
     }
 
+    pub fn end() -> Self {
+        Position {
+            line: usize::MAX,
+            column: usize::MAX,
+        }
+    }
+
+    pub fn line_start(self) -> Self {
+        Position {
+            line: self.line,
+            column: 0,
+        }
+    }
+
+    pub fn line_end(self) -> Self {
+        Position {
+            line: self.line,
+            column: usize::MAX,
+        }
+    }
+
+    pub fn right(self) -> Self {
+        Position {
+            line: self.line,
+            column: self.column + 1,
+        }
+    }
+
+    pub fn left(self) -> Self {
+        if self.column == 0 {
+            return self;
+        }
+        Position {
+            line: self.line,
+            column: self.column - 1,
+        }
+    }
+
+    pub fn down(self) -> Self {
+        Position {
+            line: self.line + 1,
+            column: self.column,
+        }
+    }
+
+    pub fn up(self) -> Self {
+        if self.line == 0 {
+            return self;
+        }
+        Position {
+            line: self.line - 1,
+            column: self.column,
+        }
+    }
+
     pub fn next(self, character: char) -> Self {
         match character {
             EOL => Position {
