@@ -32,7 +32,7 @@ impl File {
         Ok(())
     }
 
-    pub fn render(
+    pub fn display(
         &mut self,
         term: &mut RawTerminal<Stdout>,
         size: Size,

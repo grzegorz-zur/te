@@ -53,7 +53,7 @@ impl Editor {
         let mut keys = stdin().keys();
         while self.run {
             let size = terminal_size()?.into();
-            self.render(&mut screen, size)?;
+            self.display(&mut screen, size)?;
             screen.flush()?;
             if let Some(Ok(key)) = keys.next() {
                 self.handle(key)?;
@@ -62,7 +62,11 @@ impl Editor {
         Ok(())
     }
 
-    fn render(&mut self, term: &mut RawTerminal<Stdout>, size: Size) -> Result<(), Box<dyn Error>> {
+    fn display(
+        &mut self,
+        term: &mut RawTerminal<Stdout>,
+        size: Size,
+    ) -> Result<(), Box<dyn Error>> {
         write!(
             term,
             "{}{}{}",
@@ -71,12 +75,12 @@ impl Editor {
             clear::All
         )?;
         match self.mode {
-            Mode::Command => self.render_command(term, size),
-            Mode::Switch => self.render_switch(term, size),
+            Mode::Command => self.display_command(term, size),
+            Mode::Switch => self.display_switch(term, size),
         }
     }
 
-    fn render_command(
+    fn display_command(
         &mut self,
         term: &mut RawTerminal<Stdout>,
         size: Size,
@@ -84,7 +88,7 @@ impl Editor {
         let (_columns, rows) = size.try_into()?;
         match self.files.get_mut(self.current) {
             Some(file) => {
-                let (position, relative) = file.render(
+                let (position, relative) = file.display(
                     term,
                     Size {
                         lines: size.lines - 1,
@@ -118,7 +122,7 @@ impl Editor {
         Ok(())
     }
 
-    fn render_switch(
+    fn display_switch(
         &mut self,
         term: &mut RawTerminal<Stdout>,
         size: Size,
