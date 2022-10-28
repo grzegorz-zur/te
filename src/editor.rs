@@ -4,7 +4,7 @@ use std::io::{stderr, stdin, stdout, Stdout, Write};
 use termion::event::Key;
 use termion::input::TermRead;
 use termion::raw::{IntoRawMode, RawTerminal};
-use termion::screen::AlternateScreen;
+use termion::screen::IntoAlternateScreen;
 use termion::{clear, color, cursor, terminal_size};
 use walkdir::WalkDir;
 
@@ -49,7 +49,7 @@ impl Editor {
 
     pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
         let term = stdout().into_raw_mode()?;
-        let mut screen = AlternateScreen::from(term);
+        let mut screen = term.into_alternate_screen()?;
         let mut keys = stdin().keys();
         while self.run {
             let size = terminal_size()?.into();
