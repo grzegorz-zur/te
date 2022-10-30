@@ -1,6 +1,11 @@
+use signal_hook::consts::signal::*;
+use signal_hook::iterator::Signals;
 use std::env::current_dir;
 use std::error::Error;
 use std::io::{stderr, stdin, stdout, Stdout, Write};
+use std::sync::mpsc;
+use std::sync::mpsc::Sender;
+use std::thread;
 use termion::event::Key;
 use termion::input::TermRead;
 use termion::raw::{IntoRawMode, RawTerminal};
@@ -11,9 +16,16 @@ use walkdir::WalkDir;
 use crate::coords::*;
 use crate::file::*;
 
+type Signal = i32;
+
 enum Mode {
     Command,
     Switch,
+}
+
+enum Message {
+    Signal(Signal),
+    Input(Key),
 }
 
 pub struct Editor {
@@ -50,16 +62,43 @@ impl Editor {
     pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
         let term = stdout().into_raw_mode()?;
         let mut screen = term.into_alternate_screen()?;
-        let mut keys = stdin().keys();
+        let (sender, receiver) = mpsc::channel::<Message>();
+        let sender_signal = sender.clone();
+        let sender_input = sender.clone();
+        thread::spawn(|| Self::signals(sender_signal));
+        thread::spawn(|| Self::input(sender_input));
         while self.run {
             let size = terminal_size()?.into();
             self.display(&mut screen, size)?;
             screen.flush()?;
-            if let Some(Ok(key)) = keys.next() {
-                self.handle(key)?;
+            let message = receiver.recv()?;
+            match message {
+                Message::Signal(signal) => self.handle_signal(signal)?,
+                Message::Input(key) => self.handle_input(key)?,
             }
         }
         Ok(())
+    }
+
+    fn signals(sender: Sender<Message>) {
+        let mut signals = Signals::new(&[SIGINT, SIGTERM, SIGQUIT]).unwrap();
+        let handle = signals.handle();
+        for signal in &mut signals {
+            let message = Message::Signal(signal);
+            println!("{}", signal);
+            sender.send(message).unwrap();
+        }
+        handle.close();
+    }
+
+    fn input(sender: Sender<Message>) {
+        loop {
+            let mut keys = stdin().keys();
+            if let Some(Ok(key)) = keys.next() {
+                let message = Message::Input(key);
+                sender.send(message).unwrap();
+            }
+        }
     }
 
     fn display(
@@ -161,7 +200,15 @@ impl Editor {
         Ok(())
     }
 
-    fn handle(&mut self, key: Key) -> Result<(), Box<dyn Error>> {
+    fn handle_signal(&mut self, signal: Signal) -> Result<(), Box<dyn Error>> {
+        match signal {
+            SIGINT | SIGTERM | SIGQUIT => self.exit(),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_input(&mut self, key: Key) -> Result<(), Box<dyn Error>> {
         match self.mode {
             Mode::Command => self.handle_command(key),
             Mode::Switch => self.handle_switch(key),
