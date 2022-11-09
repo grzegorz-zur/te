@@ -1,22 +1,24 @@
-use signal_hook::consts::signal::*;
+use signal_hook::consts::*;
 use signal_hook::iterator::Signals;
+use signal_hook::low_level::raise;
 use std::env::current_dir;
 use std::error::Error;
-use std::io::{stderr, stdin, stdout, Stdout, Write};
+use std::io::{stdin, stdout, Stdout, Write};
+use std::os::raw::c_int;
 use std::sync::mpsc;
 use std::sync::mpsc::Sender;
 use std::thread;
 use termion::event::Key;
 use termion::input::TermRead;
 use termion::raw::{IntoRawMode, RawTerminal};
-use termion::screen::IntoAlternateScreen;
+use termion::screen::{AlternateScreen, IntoAlternateScreen, ToAlternateScreen, ToMainScreen};
 use termion::{clear, color, cursor, terminal_size};
 use walkdir::WalkDir;
 
 use crate::coords::*;
 use crate::file::*;
 
-type Signal = i32;
+pub type Screen = AlternateScreen<RawTerminal<Stdout>>;
 
 enum Mode {
     Command,
@@ -24,7 +26,7 @@ enum Mode {
 }
 
 enum Message {
-    Signal(Signal),
+    Signal(c_int),
     Input(Key),
 }
 
@@ -40,11 +42,12 @@ pub struct Editor {
     position: Position,
     files: Vec<File>,
     current: usize,
+    screen: Screen,
 }
 
 impl Editor {
-    pub fn create() -> Editor {
-        Editor {
+    pub fn create() -> Result<Editor, Box<dyn Error>> {
+        Ok(Editor {
             run: true,
             mode: Mode::Command,
             path: String::new(),
@@ -56,12 +59,11 @@ impl Editor {
             position: Position::start(),
             files: vec![],
             current: 0,
-        }
+            screen: stdout().into_raw_mode()?.into_alternate_screen()?,
+        })
     }
 
     pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
-        let term = stdout().into_raw_mode()?;
-        let mut screen = term.into_alternate_screen()?;
         let (sender, receiver) = mpsc::channel::<Message>();
         let sender_signal = sender.clone();
         let sender_input = sender.clone();
@@ -69,8 +71,8 @@ impl Editor {
         thread::spawn(|| Self::input(sender_input));
         while self.run {
             let size = terminal_size()?.into();
-            self.display(&mut screen, size)?;
-            screen.flush()?;
+            self.display(size)?;
+            self.screen.flush()?;
             let message = receiver.recv()?;
             match message {
                 Message::Signal(signal) => self.handle_signal(signal)?,
@@ -81,11 +83,10 @@ impl Editor {
     }
 
     fn signals(sender: Sender<Message>) {
-        let mut signals = Signals::new(&[SIGINT, SIGTERM, SIGQUIT]).unwrap();
+        let mut signals = Signals::new(&[SIGTSTP, SIGCONT, SIGINT, SIGTERM, SIGQUIT]).unwrap();
         let handle = signals.handle();
         for signal in &mut signals {
             let message = Message::Signal(signal);
-            println!("{}", signal);
             sender.send(message).unwrap();
         }
         handle.close();
@@ -101,41 +102,33 @@ impl Editor {
         }
     }
 
-    fn display(
-        &mut self,
-        term: &mut RawTerminal<Stdout>,
-        size: Size,
-    ) -> Result<(), Box<dyn Error>> {
+    fn display(&mut self, size: Size) -> Result<(), Box<dyn Error>> {
         write!(
-            term,
+            &mut self.screen,
             "{}{}{}",
             color::Bg(color::Reset),
             cursor::Goto(1, 1),
             clear::All
         )?;
         match self.mode {
-            Mode::Command => self.display_command(term, size),
-            Mode::Switch => self.display_switch(term, size),
+            Mode::Command => self.display_command(size),
+            Mode::Switch => self.display_switch(size),
         }
     }
 
-    fn display_command(
-        &mut self,
-        term: &mut RawTerminal<Stdout>,
-        size: Size,
-    ) -> Result<(), Box<dyn Error>> {
+    fn display_command(&mut self, size: Size) -> Result<(), Box<dyn Error>> {
         let (_columns, rows) = size.try_into()?;
         match self.files.get_mut(self.current) {
             Some(file) => {
                 let (position, relative) = file.display(
-                    term,
+                    &mut self.screen,
                     Size {
                         lines: size.lines - 1,
                         columns: size.columns,
                     },
                 )?;
                 write!(
-                    term,
+                    self.screen,
                     "{}{}{}{} {}:{}",
                     cursor::Goto(1, rows),
                     color::Bg(color::Green),
@@ -145,12 +138,12 @@ impl Editor {
                     position.column,
                 )?;
                 if let Ok((column, row)) = relative.try_into() {
-                    write!(term, "{}", cursor::Goto(column, row))?;
+                    write!(self.screen, "{}", cursor::Goto(column, row))?;
                 }
             }
             None => {
                 write!(
-                    term,
+                    self.screen,
                     "{}{}{}",
                     cursor::Goto(1, rows),
                     color::Bg(color::Green),
@@ -161,11 +154,7 @@ impl Editor {
         Ok(())
     }
 
-    fn display_switch(
-        &mut self,
-        term: &mut RawTerminal<Stdout>,
-        size: Size,
-    ) -> Result<(), Box<dyn Error>> {
+    fn display_switch(&mut self, size: Size) -> Result<(), Box<dyn Error>> {
         self.offset = self.offset.shift(
             self.position,
             Size {
@@ -177,10 +166,10 @@ impl Editor {
             .iter()
             .skip(self.offset.line)
             .take(size.lines - 1)
-            .try_for_each(|file| write!(term, "{}\r\n", file))?;
+            .try_for_each(|file| write!(self.screen, "{}\r\n", file))?;
         if let Some(path) = self.view.get(self.position.line) {
             write!(
-                term,
+                self.screen,
                 "{}{}{}{}",
                 cursor::Goto(1, (self.position.line - self.offset.line + 1).try_into()?),
                 color::Bg(color::LightBlack),
@@ -189,7 +178,7 @@ impl Editor {
             )?;
         }
         write!(
-            term,
+            self.screen,
             "{}{}{}{} {}",
             cursor::Goto(1, size.lines.try_into()?),
             color::Bg(color::Blue),
@@ -200,9 +189,11 @@ impl Editor {
         Ok(())
     }
 
-    fn handle_signal(&mut self, signal: Signal) -> Result<(), Box<dyn Error>> {
+    fn handle_signal(&mut self, signal: c_int) -> Result<(), Box<dyn Error>> {
         match signal {
             SIGINT | SIGTERM | SIGQUIT => self.exit(),
+            SIGTSTP => self.pause()?,
+            SIGCONT => self.unpause()?,
             _ => {}
         }
         Ok(())
@@ -218,6 +209,7 @@ impl Editor {
     fn handle_command(&mut self, key: Key) -> Result<(), Box<dyn Error>> {
         match key {
             Key::Char('\t') => self.switch()?,
+            Key::Char('b') => self.pause()?,
             Key::Char('B') => self.exit(),
             _ => {}
         }
@@ -279,6 +271,21 @@ impl Editor {
     fn switch(&mut self) -> Result<(), Box<dyn Error>> {
         self.mode = Mode::Switch;
         self.list()?;
+        Ok(())
+    }
+
+    fn pause(&mut self) -> Result<(), Box<dyn Error>> {
+        write!(self.screen, "{}{}", clear::All, ToMainScreen)?;
+        self.screen.suspend_raw_mode()?;
+        self.screen.flush()?;
+        raise(SIGSTOP)?;
+        Ok(())
+    }
+
+    fn unpause(&mut self) -> Result<(), Box<dyn Error>> {
+        self.screen.activate_raw_mode()?;
+        write!(self.screen, "{}{}", ToAlternateScreen, clear::All)?;
+        self.screen.flush()?;
         Ok(())
     }
 
@@ -346,7 +353,6 @@ impl Editor {
 
 impl Drop for Editor {
     fn drop(&mut self) {
-        stdout().flush().unwrap();
-        stderr().flush().unwrap();
+        self.screen.flush().unwrap();
     }
 }

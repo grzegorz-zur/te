@@ -1,11 +1,10 @@
 use std::error::Error;
 use std::fs::read_to_string;
-use std::io::Stdout;
 use std::io::Write;
-use termion::raw::RawTerminal;
 use termion::{clear, color, cursor};
 
 use crate::coords::*;
+use crate::editor::*;
 use crate::utils::*;
 
 pub struct File {
@@ -34,12 +33,12 @@ impl File {
 
     pub fn display(
         &mut self,
-        term: &mut RawTerminal<Stdout>,
+        screen: &mut Screen,
         size: Size,
     ) -> Result<(Position, Position), Box<dyn Error>> {
         self.offset = self.offset.shift(self.position, size);
         write!(
-            term,
+            screen,
             "{}{}{}",
             color::Bg(color::Reset),
             cursor::Goto(1, 1),
@@ -50,7 +49,7 @@ impl File {
             .skip(self.offset.line)
             .take(size.lines)
             .map(|line| sub(line, self.offset.column..self.offset.column + size.columns))
-            .try_for_each(|line| write!(term, "{}\r\n", line))?;
+            .try_for_each(|line| write!(screen, "{}\r\n", line))?;
         let relative = Position::start() + (self.position - self.offset);
         Ok((self.position, relative))
     }
