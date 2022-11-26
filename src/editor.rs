@@ -1,33 +1,27 @@
+use crate::coords::*;
+use crate::file::*;
+use crossterm::cursor::*;
+use crossterm::event::*;
+use crossterm::style::*;
+use crossterm::terminal::*;
+use crossterm::{execute, queue};
+use libc;
 use signal_hook::consts::*;
-use signal_hook::iterator::Signals;
+use signal_hook::flag::register;
 use signal_hook::low_level::raise;
 use std::env::current_dir;
 use std::error::Error;
-use std::io::{stdin, stdout, Stdout, Write};
-use std::os::raw::c_int;
-use std::sync::mpsc;
-use std::sync::mpsc::Sender;
-use std::thread;
-use termion::event::Key;
-use termion::input::TermRead;
-use termion::raw::{IntoRawMode, RawTerminal};
-use termion::screen::{AlternateScreen, IntoAlternateScreen, ToAlternateScreen, ToMainScreen};
-use termion::{clear, color, cursor, terminal_size};
+use std::io::{stdout, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 use walkdir::WalkDir;
 
-use crate::coords::*;
-use crate::file::*;
-
-pub type Screen = AlternateScreen<RawTerminal<Stdout>>;
+const TIMEOUT: Duration = Duration::from_millis(200);
 
 enum Mode {
     Command,
     Switch,
-}
-
-enum Message {
-    Signal(c_int),
-    Input(Key),
 }
 
 pub struct Editor {
@@ -42,12 +36,11 @@ pub struct Editor {
     position: Position,
     files: Vec<File>,
     current: usize,
-    screen: Screen,
 }
 
 impl Editor {
-    pub fn create() -> Result<Editor, Box<dyn Error>> {
-        Ok(Editor {
+    pub fn create() -> Editor {
+        Editor {
             run: true,
             mode: Mode::Command,
             path: String::new(),
@@ -59,95 +52,89 @@ impl Editor {
             position: Position::start(),
             files: vec![],
             current: 0,
-            screen: stdout().into_raw_mode()?.into_alternate_screen()?,
-        })
+        }
     }
 
     pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
-        let (sender, receiver) = mpsc::channel::<Message>();
-        let sender_signal = sender.clone();
-        let sender_input = sender.clone();
-        thread::spawn(|| Self::signals(sender_signal));
-        thread::spawn(|| Self::input(sender_input));
+        let term = Arc::new(AtomicBool::new(false));
+        register(libc::SIGINT, term.clone())?;
+        register(libc::SIGTERM, term.clone())?;
+        register(libc::SIGQUIT, term.clone())?;
+        let pause = Arc::new(AtomicBool::new(false));
+        register(libc::SIGTSTP, pause.clone())?;
+        let unpause = Arc::new(AtomicBool::new(false));
+        register(libc::SIGCONT, unpause.clone())?;
+        enable_raw_mode()?;
+        execute!(stdout(), EnterAlternateScreen)?;
+        let mut display = true;
         while self.run {
-            let size = terminal_size()?.into();
-            self.display(size)?;
-            self.screen.flush()?;
-            let message = receiver.recv()?;
-            match message {
-                Message::Signal(signal) => self.handle_signal(signal)?,
-                Message::Input(key) => self.handle_input(key)?,
+            if term.load(Ordering::Relaxed) {
+                self.exit();
+            }
+            if pause.load(Ordering::Relaxed) {
+                self.pause()?;
+            }
+            if unpause.load(Ordering::Relaxed) {
+                self.unpause()?;
+                display = true;
+            };
+            if display {
+                self.display()?;
+                display = false
+            }
+            if poll(TIMEOUT)? {
+                if let Event::Key(key) = read()? {
+                    self.handle_input(key)?;
+                    display = true;
+                }
             }
         }
+        execute!(stdout(), LeaveAlternateScreen)?;
+        disable_raw_mode()?;
         Ok(())
     }
 
-    fn signals(sender: Sender<Message>) {
-        let mut signals = Signals::new(&[SIGTSTP, SIGCONT, SIGINT, SIGTERM, SIGQUIT]).unwrap();
-        let handle = signals.handle();
-        for signal in &mut signals {
-            let message = Message::Signal(signal);
-            sender.send(message).unwrap();
-        }
-        handle.close();
-    }
-
-    fn input(sender: Sender<Message>) {
-        loop {
-            let mut keys = stdin().keys();
-            if let Some(Ok(key)) = keys.next() {
-                let message = Message::Input(key);
-                sender.send(message).unwrap();
-            }
-        }
-    }
-
-    fn display(&mut self, size: Size) -> Result<(), Box<dyn Error>> {
-        write!(
-            &mut self.screen,
-            "{}{}{}",
-            color::Bg(color::Reset),
-            cursor::Goto(1, 1),
-            clear::All
-        )?;
+    fn display(&mut self) -> Result<(), Box<dyn Error>> {
+        let size = size()?.into();
+        queue!(stdout(), ResetColor, MoveTo(0, 0), Clear(ClearType::All))?;
         match self.mode {
-            Mode::Command => self.display_command(size),
-            Mode::Switch => self.display_switch(size),
-        }
+            Mode::Command => self.display_command(size)?,
+            Mode::Switch => self.display_switch(size)?,
+        };
+        stdout().flush()?;
+        Ok(())
     }
 
     fn display_command(&mut self, size: Size) -> Result<(), Box<dyn Error>> {
         let (_columns, rows) = size.try_into()?;
         match self.files.get_mut(self.current) {
             Some(file) => {
-                let (position, relative) = file.display(
-                    &mut self.screen,
-                    Size {
-                        lines: size.lines - 1,
-                        columns: size.columns,
-                    },
-                )?;
-                write!(
-                    self.screen,
-                    "{}{}{}{} {}:{}",
-                    cursor::Goto(1, rows),
-                    color::Bg(color::Green),
-                    clear::CurrentLine,
-                    file.path,
-                    position.line,
-                    position.column,
+                let (position, relative) = file.display(Size {
+                    lines: size.lines - 1,
+                    columns: size.columns,
+                })?;
+                queue!(
+                    stdout(),
+                    MoveTo(0, rows - 1),
+                    SetBackgroundColor(Color::Green),
+                    Clear(ClearType::CurrentLine),
+                    Print(format!(
+                        "{} {}:{}",
+                        file.path,
+                        position.line + 1,
+                        position.column + 1
+                    )),
                 )?;
                 if let Ok((column, row)) = relative.try_into() {
-                    write!(self.screen, "{}", cursor::Goto(column, row))?;
+                    queue!(stdout(), MoveTo(column - 1, row - 1))?;
                 }
             }
             None => {
-                write!(
-                    self.screen,
-                    "{}{}{}",
-                    cursor::Goto(1, rows),
-                    color::Bg(color::Green),
-                    clear::CurrentLine,
+                queue!(
+                    stdout(),
+                    MoveTo(0, rows - 1),
+                    SetBackgroundColor(Color::Green),
+                    Clear(ClearType::CurrentLine),
                 )?;
             }
         }
@@ -166,96 +153,86 @@ impl Editor {
             .iter()
             .skip(self.offset.line)
             .take(size.lines - 1)
-            .try_for_each(|file| write!(self.screen, "{}\r\n", file))?;
+            .try_for_each(|file| queue!(stdout(), Print(file), MoveToNextLine(1)))?;
         if let Some(path) = self.view.get(self.position.line) {
-            write!(
-                self.screen,
-                "{}{}{}{}",
-                cursor::Goto(1, (self.position.line - self.offset.line + 1).try_into()?),
-                color::Bg(color::LightBlack),
-                clear::CurrentLine,
-                path
+            queue!(
+                stdout(),
+                MoveTo(
+                    0,
+                    (self.position.line - self.offset.line).try_into().unwrap()
+                ),
+                SetBackgroundColor(Color::DarkGrey),
+                Clear(ClearType::CurrentLine),
+                Print(path),
             )?;
         }
-        write!(
-            self.screen,
-            "{}{}{}{} {}",
-            cursor::Goto(1, size.lines.try_into()?),
-            color::Bg(color::Blue),
-            clear::CurrentLine,
-            self.path,
-            self.query,
+        queue!(
+            stdout(),
+            MoveTo(0, (size.lines - 1).try_into().unwrap()),
+            SetBackgroundColor(Color::Blue),
+            Clear(ClearType::CurrentLine),
+            Print(format!("{} {}", self.path, self.query)),
         )?;
         Ok(())
     }
 
-    fn handle_signal(&mut self, signal: c_int) -> Result<(), Box<dyn Error>> {
-        match signal {
-            SIGINT | SIGTERM | SIGQUIT => self.exit(),
-            SIGTSTP => self.pause()?,
-            SIGCONT => self.unpause()?,
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn handle_input(&mut self, key: Key) -> Result<(), Box<dyn Error>> {
+    fn handle_input(&mut self, key: KeyEvent) -> Result<(), Box<dyn Error>> {
         match self.mode {
             Mode::Command => self.handle_command(key),
             Mode::Switch => self.handle_switch(key),
         }
     }
 
-    fn handle_command(&mut self, key: Key) -> Result<(), Box<dyn Error>> {
-        match key {
-            Key::Char('\t') => self.switch()?,
-            Key::Char('b') => self.pause()?,
-            Key::Char('B') => self.exit(),
+    fn handle_command(&mut self, key: KeyEvent) -> Result<(), Box<dyn Error>> {
+        match key.code {
+            KeyCode::Tab => self.switch()?,
+            KeyCode::Char('b') => self.pause()?,
+            KeyCode::Char('B') => self.exit(),
             _ => {}
         }
         if let Some(file) = self.files.get_mut(self.current) {
-            match key {
-                Key::Char('a') => file.goto(file.position.up()),
-                Key::Char('A') => file.goto(Position::start()),
-                Key::Char('s') => file.goto(file.position.down()),
-                Key::Char('S') => file.goto(Position::end()),
-                Key::Char('d') => file.goto(file.position.left()),
-                Key::Char('D') => file.goto(file.position.line_start()),
-                Key::Char('f') => file.goto(file.position.right()),
-                Key::Char('F') => file.goto(file.position.line_end()),
-                Key::Up => file.goto(file.position.up()),
-                Key::Down => file.goto(file.position.down()),
-                Key::Left => file.goto(file.position.left()),
-                Key::Right => file.goto(file.position.right()),
+            match key.code {
+                KeyCode::Char('a') => file.goto(file.position.up()),
+                KeyCode::Char('A') => file.goto(Position::start()),
+                KeyCode::Char('s') => file.goto(file.position.down()),
+                KeyCode::Char('S') => file.goto(Position::end()),
+                KeyCode::Char('d') => file.goto(file.position.left()),
+                KeyCode::Char('D') => file.goto(file.position.line_start()),
+                KeyCode::Char('f') => file.goto(file.position.right()),
+                KeyCode::Char('F') => file.goto(file.position.line_end()),
+                KeyCode::Up => file.goto(file.position.up()),
+                KeyCode::Down => file.goto(file.position.down()),
+                KeyCode::Left => file.goto(file.position.left()),
+                KeyCode::Right => file.goto(file.position.right()),
                 _ => {}
             }
         }
         Ok(())
     }
 
-    fn handle_switch(&mut self, key: Key) -> Result<(), Box<dyn Error>> {
-        match key {
-            Key::Char('\t') => self.command(),
-            Key::BackTab => {
+    fn handle_switch(&mut self, key: KeyEvent) -> Result<(), Box<dyn Error>> {
+        match key.code {
+            KeyCode::Tab => self.command(),
+            KeyCode::BackTab => {
                 self.hide = !self.hide;
                 self.list()?;
             }
-            Key::Down => {
+            KeyCode::Down => {
                 if self.position.line + 1 < self.view.len() {
                     self.position.line += 1;
                 }
             }
-            Key::Up => {
+            KeyCode::Up => {
                 if self.position.line > 0 {
                     self.position.line -= 1;
                 }
             }
-            Key::Backspace => {
+            KeyCode::Backspace => {
                 self.query.pop();
                 self.filter();
             }
-            Key::Char('\n') => self.open()?,
-            Key::Char(c) => {
+            KeyCode::Enter => self.open()?,
+            KeyCode::Char(c) => {
                 self.query.push(c);
                 self.filter()
             }
@@ -275,17 +252,15 @@ impl Editor {
     }
 
     fn pause(&mut self) -> Result<(), Box<dyn Error>> {
-        write!(self.screen, "{}{}", clear::All, ToMainScreen)?;
-        self.screen.suspend_raw_mode()?;
-        self.screen.flush()?;
+        execute!(stdout(), ResetColor, LeaveAlternateScreen)?;
+        disable_raw_mode()?;
         raise(SIGSTOP)?;
         Ok(())
     }
 
     fn unpause(&mut self) -> Result<(), Box<dyn Error>> {
-        self.screen.activate_raw_mode()?;
-        write!(self.screen, "{}{}", ToAlternateScreen, clear::All)?;
-        self.screen.flush()?;
+        enable_raw_mode()?;
+        execute!(stdout(), ResetColor, EnterAlternateScreen)?;
         Ok(())
     }
 
@@ -348,11 +323,5 @@ impl Editor {
             .cloned()
             .collect();
         self.position = Position::start();
-    }
-}
-
-impl Drop for Editor {
-    fn drop(&mut self) {
-        self.screen.flush().unwrap();
     }
 }

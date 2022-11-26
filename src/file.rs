@@ -1,11 +1,12 @@
+use crate::coords::*;
+use crate::utils::*;
+use crossterm::cursor::*;
+use crossterm::queue;
+use crossterm::style::*;
+use crossterm::terminal::*;
 use std::error::Error;
 use std::fs::read_to_string;
-use std::io::Write;
-use termion::{clear, color, cursor};
-
-use crate::coords::*;
-use crate::editor::*;
-use crate::utils::*;
+use std::io::stdout;
 
 pub struct File {
     pub path: String,
@@ -31,25 +32,15 @@ impl File {
         Ok(())
     }
 
-    pub fn display(
-        &mut self,
-        screen: &mut Screen,
-        size: Size,
-    ) -> Result<(Position, Position), Box<dyn Error>> {
+    pub fn display(&mut self, size: Size) -> Result<(Position, Position), Box<dyn Error>> {
         self.offset = self.offset.shift(self.position, size);
-        write!(
-            screen,
-            "{}{}{}",
-            color::Bg(color::Reset),
-            cursor::Goto(1, 1),
-            clear::All
-        )?;
+        queue!(stdout(), ResetColor, MoveTo(0, 0), Clear(ClearType::All),)?;
         self.content
             .lines()
             .skip(self.offset.line)
             .take(size.lines)
             .map(|line| sub(line, self.offset.column..self.offset.column + size.columns))
-            .try_for_each(|line| write!(screen, "{}\r\n", line))?;
+            .try_for_each(|line| queue!(stdout(), Print(line), MoveToNextLine(1)))?;
         let relative = Position::start() + (self.position - self.offset);
         Ok((self.position, relative))
     }
