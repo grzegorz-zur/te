@@ -231,7 +231,7 @@ impl Editor {
                 self.query.pop();
                 self.filter();
             }
-            KeyCode::Enter => self.open()?,
+            KeyCode::Enter => self.select()?,
             KeyCode::Char(c) => {
                 self.query.push(c);
                 self.filter()
@@ -268,13 +268,18 @@ impl Editor {
         self.run = false;
     }
 
-    fn open(&mut self) -> Result<(), Box<dyn Error>> {
-        if let Some(path) = self.view.get(self.position.line) {
-            let file = File::open(path)?;
-            self.files.push(file);
-            self.current = self.files.len() - 1;
-            self.mode = Mode::Command;
+    fn select(&mut self) -> Result<(), Box<dyn Error>> {
+        if let Some(path) = self.view.get(self.position.line).map(String::clone) {
+            self.open(&path);
         }
+        Ok(())
+    }
+
+    pub fn open(&mut self, path: &str) -> Result<(), Box<dyn Error>> {
+        let file = File::open(path)?;
+        self.files.push(file);
+        self.current = self.files.len() - 1;
+        self.mode = Mode::Command;
         Ok(())
     }
 
