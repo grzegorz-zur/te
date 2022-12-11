@@ -270,7 +270,7 @@ impl Editor {
 
     fn select(&mut self) -> Result<(), Box<dyn Error>> {
         if let Some(path) = self.view.get(self.position.line).map(String::clone) {
-            self.open(&path);
+            self.open(&path)?;
         }
         Ok(())
     }

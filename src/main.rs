@@ -14,8 +14,9 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         return Err(Box::new(Error::new(ErrorKind::Other, "No TTY")));
     }
     let mut editor = Editor::create();
-    for file in env::args() {
-        editor.open(&file);
+    let files: Vec<String> = env::args().skip(1).collect();
+    for file in files {
+        editor.open(&file)?;
     }
     editor.run()
 }
