@@ -5,11 +5,13 @@ use crossterm::queue;
 use crossterm::style::*;
 use crossterm::terminal::*;
 use std::error::Error;
-use std::fs::read_to_string;
+use std::fs;
 use std::io::stdout;
+use std::time::SystemTime;
 
 pub struct File {
     pub path: String,
+    pub timestamp: SystemTime,
     pub content: String,
     pub position: Position,
     pub offset: Position,
@@ -19,6 +21,7 @@ impl File {
     pub fn open(path: &str) -> Result<File, Box<dyn Error>> {
         let mut file = File {
             path: path.to_string(),
+            timestamp: SystemTime::now(),
             content: String::new(),
             position: Position::start(),
             offset: Position::start(),
@@ -28,8 +31,19 @@ impl File {
     }
 
     pub fn read(&mut self) -> Result<(), Box<dyn Error>> {
-        self.content = read_to_string(&self.path)?;
+        self.content = fs::read_to_string(&self.path)?;
+        self.timestamp = fs::metadata(&self.path)?.modified()?;
+        self.goto(self.position);
         Ok(())
+    }
+
+    pub fn refresh(&mut self) -> Result<bool, Box<dyn Error>> {
+        let timestamp = fs::metadata(&self.path)?.modified()?;
+        if self.timestamp == timestamp {
+            return Ok(false);
+        }
+        self.read()?;
+        Ok(true)
     }
 
     pub fn display(&mut self, size: Size) -> Result<(Position, Position), Box<dyn Error>> {

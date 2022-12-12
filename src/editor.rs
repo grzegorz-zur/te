@@ -78,6 +78,9 @@ impl Editor {
                 self.unpause()?;
                 display = true;
             };
+            if let Some(file) = self.files.get_mut(self.current) {
+                display |= file.refresh()?;
+            }
             if display {
                 self.display()?;
                 display = false
@@ -200,6 +203,7 @@ impl Editor {
                 KeyCode::Char('D') => file.goto(file.position.line_start()),
                 KeyCode::Char('f') => file.goto(file.position.right()),
                 KeyCode::Char('F') => file.goto(file.position.line_end()),
+                KeyCode::Char('N') => file.read()?,
                 KeyCode::Up => file.goto(file.position.up()),
                 KeyCode::Down => file.goto(file.position.down()),
                 KeyCode::Left => file.goto(file.position.left()),
