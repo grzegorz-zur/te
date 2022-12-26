@@ -56,44 +56,67 @@ impl Editor {
     }
 
     pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
-        let term = Arc::new(AtomicBool::new(false));
-        register(libc::SIGINT, term.clone())?;
-        register(libc::SIGTERM, term.clone())?;
-        register(libc::SIGQUIT, term.clone())?;
+        let terminate = Arc::new(AtomicBool::new(false));
         let pause = Arc::new(AtomicBool::new(false));
-        register(libc::SIGTSTP, pause.clone())?;
         let unpause = Arc::new(AtomicBool::new(false));
+
+        register(libc::SIGINT, terminate.clone())?;
+        register(libc::SIGTERM, terminate.clone())?;
+        register(libc::SIGQUIT, terminate.clone())?;
+        register(libc::SIGTSTP, pause.clone())?;
         register(libc::SIGCONT, unpause.clone())?;
+
         enable_raw_mode()?;
         execute!(stdout(), EnterAlternateScreen)?;
+
+        let mut result: Result<(), Box<dyn Error>> = Ok(());
         let mut display = true;
-        while self.run {
-            if term.load(Ordering::Relaxed) {
-                self.exit();
-            }
-            if pause.load(Ordering::Relaxed) {
-                self.pause()?;
-            }
-            if unpause.load(Ordering::Relaxed) {
-                self.unpause()?;
-                display = true;
-            };
-            if let Some(file) = self.files.get_mut(self.current) {
-                display |= file.refresh()?;
-            }
-            if display {
-                self.display()?;
-                display = false
-            }
-            if poll(TIMEOUT)? {
-                if let Event::Key(key) = read()? {
-                    self.handle_input(key)?;
-                    display = true;
-                }
-            }
+
+        while self.run && result.is_ok() {
+            result = self.step(
+                &mut display,
+                terminate.clone(),
+                pause.clone(),
+                unpause.clone(),
+            );
         }
+
         execute!(stdout(), LeaveAlternateScreen)?;
         disable_raw_mode()?;
+
+        result
+    }
+
+    fn step(
+        &mut self,
+        display: &mut bool,
+        terminate: Arc<AtomicBool>,
+        pause: Arc<AtomicBool>,
+        unpause: Arc<AtomicBool>,
+    ) -> Result<(), Box<dyn Error>> {
+        if terminate.load(Ordering::Relaxed) {
+            self.stop()?;
+        }
+        if pause.load(Ordering::Relaxed) {
+            self.pause()?;
+        }
+        if unpause.load(Ordering::Relaxed) {
+            self.unpause()?;
+            *display = true;
+        };
+        if let Some(file) = self.files.get_mut(self.current) {
+            *display |= file.refresh()?;
+        }
+        if *display {
+            self.display()?;
+            *display = false
+        }
+        if poll(TIMEOUT)? {
+            if let Event::Key(key) = read()? {
+                self.handle_input(key)?;
+                *display = true;
+            }
+        }
         Ok(())
     }
 
@@ -190,7 +213,9 @@ impl Editor {
         match key.code {
             KeyCode::Tab => self.switch()?,
             KeyCode::Char('b') => self.pause()?,
-            KeyCode::Char('B') => self.exit(),
+            KeyCode::Char('B') => self.stop()?,
+            KeyCode::Char('n') => self.close()?,
+            KeyCode::Char('m') => self.write()?,
             _ => {}
         }
         if let Some(file) = self.files.get_mut(self.current) {
@@ -204,6 +229,7 @@ impl Editor {
                 KeyCode::Char('f') => file.goto(file.position.right()),
                 KeyCode::Char('F') => file.goto(file.position.line_end()),
                 KeyCode::Char('N') => file.read()?,
+                KeyCode::Char('M') => file.write()?,
                 KeyCode::Up => file.goto(file.position.up()),
                 KeyCode::Down => file.goto(file.position.down()),
                 KeyCode::Left => file.goto(file.position.left()),
@@ -268,12 +294,17 @@ impl Editor {
         Ok(())
     }
 
-    fn exit(&mut self) {
+    fn stop(&mut self) -> Result<(), Box<dyn Error>> {
+        self.write()?;
         self.run = false;
+        Ok(())
     }
 
     fn select(&mut self) -> Result<(), Box<dyn Error>> {
         if let Some(path) = self.view.get(self.position.line).map(String::clone) {
+            self.open(&path)?;
+        } else {
+            let path = self.query.to_string();
             self.open(&path)?;
         }
         Ok(())
@@ -284,6 +315,26 @@ impl Editor {
         self.files.push(file);
         self.current = self.files.len() - 1;
         self.mode = Mode::Command;
+        Ok(())
+    }
+
+    pub fn write(&mut self) -> Result<(), Box<dyn Error>> {
+        for file in self.files.iter_mut() {
+            file.write()?;
+        }
+        Ok(())
+    }
+
+    pub fn close(&mut self) -> Result<(), Box<dyn Error>> {
+        if let Some(file) = self.files.get_mut(self.current) {
+            file.write()?;
+            self.files.remove(self.current);
+            if self.files.len() != 0 {
+                self.current = (self.current + 1) % self.files.len();
+            } else {
+                self.current = 0;
+            }
+        }
         Ok(())
     }
 

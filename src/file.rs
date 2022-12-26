@@ -6,7 +6,7 @@ use crossterm::style::*;
 use crossterm::terminal::*;
 use std::error::Error;
 use std::fs;
-use std::io::stdout;
+use std::io::{stdout, Read, Write};
 use std::time::SystemTime;
 
 pub struct File {
@@ -31,9 +31,22 @@ impl File {
     }
 
     pub fn read(&mut self) -> Result<(), Box<dyn Error>> {
-        self.content = fs::read_to_string(&self.path)?;
-        self.timestamp = fs::metadata(&self.path)?.modified()?;
+        let mut file = fs::File::options().read(true).open(&self.path)?;
+        file.read_to_string(&mut self.content)?;
+        self.timestamp = file.metadata()?.modified()?;
         self.goto(self.position);
+        Ok(())
+    }
+
+    pub fn write(&mut self) -> Result<(), Box<dyn Error>> {
+        let mut file = fs::File::options()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&self.path)?;
+        file.write_all(self.content.as_bytes())?;
+        file.sync_all()?;
+        self.timestamp = file.metadata()?.modified()?;
         Ok(())
     }
 
