@@ -212,6 +212,8 @@ impl Editor {
     fn handle_command(&mut self, key: KeyEvent) -> Result<(), Box<dyn Error>> {
         match key.code {
             KeyCode::Tab => self.switch()?,
+            KeyCode::Char('c') => self.previous(),
+            KeyCode::Char('v') => self.next(),
             KeyCode::Char('b') => self.pause()?,
             KeyCode::Char('B') => self.stop()?,
             KeyCode::Char('n') => self.close()?,
@@ -238,6 +240,32 @@ impl Editor {
             }
         }
         Ok(())
+    }
+
+    fn previous(&mut self) {
+        let length = self.files.len();
+        if length == 0 {
+            self.current = 0;
+            return;
+        }
+        if self.current == 0 {
+            self.current = length - 1;
+        } else {
+            self.current -= 1;
+        }
+    }
+
+    fn next(&mut self) {
+        let length = self.files.len();
+        if length == 0 {
+            self.current = 0;
+            return;
+        }
+        if self.current + 1 == length {
+            self.current = 0;
+        } else {
+            self.current += 1;
+        }
     }
 
     fn handle_switch(&mut self, key: KeyEvent) -> Result<(), Box<dyn Error>> {
@@ -329,11 +357,7 @@ impl Editor {
         if let Some(file) = self.files.get_mut(self.current) {
             file.write()?;
             self.files.remove(self.current);
-            if self.files.len() != 0 {
-                self.current = (self.current + 1) % self.files.len();
-            } else {
-                self.current = 0;
-            }
+            self.previous();
         }
         Ok(())
     }
